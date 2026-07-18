@@ -34,6 +34,29 @@ func TestParseCodexRetryAfter(t *testing.T) {
 		}
 	})
 
+	t.Run("caps far-future resets_at", func(t *testing.T) {
+		resetAt := now.Add(129 * time.Hour).Unix()
+		body := []byte(`{"error":{"type":"usage_limit_reached","resets_at":` + itoa(resetAt) + `}}`)
+		retryAfter := parseCodexRetryAfter(http.StatusTooManyRequests, body, now)
+		if retryAfter == nil {
+			t.Fatalf("expected retryAfter, got nil")
+		}
+		if *retryAfter != codexMaxUsageLimitCooldown {
+			t.Fatalf("retryAfter = %v, want cap %v", *retryAfter, codexMaxUsageLimitCooldown)
+		}
+	})
+
+	t.Run("caps far-future resets_in_seconds", func(t *testing.T) {
+		body := []byte(`{"error":{"type":"usage_limit_reached","resets_in_seconds":172800}}`)
+		retryAfter := parseCodexRetryAfter(http.StatusTooManyRequests, body, now)
+		if retryAfter == nil {
+			t.Fatalf("expected retryAfter, got nil")
+		}
+		if *retryAfter != codexMaxUsageLimitCooldown {
+			t.Fatalf("retryAfter = %v, want cap %v", *retryAfter, codexMaxUsageLimitCooldown)
+		}
+	})
+
 	t.Run("fallback when resets_at is past", func(t *testing.T) {
 		resetAt := now.Add(-1 * time.Minute).Unix()
 		body := []byte(`{"error":{"type":"usage_limit_reached","resets_at":` + itoa(resetAt) + `,"resets_in_seconds":77}}`)

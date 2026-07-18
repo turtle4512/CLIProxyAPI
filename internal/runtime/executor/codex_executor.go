@@ -40,6 +40,12 @@ const (
 	codexDefaultImageToolModel = "gpt-image-2"
 	codexResponsesLiteHeader   = "X-OpenAI-Internal-Codex-Responses-Lite"
 	codexResponsesLiteMetadata = "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite"
+	// codexMaxUsageLimitCooldown caps how long a codex credential is cooled after
+	// a usage_limit_reached 429. Upstream resets_at can be days out (weekly window),
+	// which would strand every codex credential far past the true availability of
+	// the fallback route. We do not trust that horizon: cool at most this long, then
+	// re-probe. See jarvis-personas BUG-20260718-002 (#1582).
+	codexMaxUsageLimitCooldown = 15 * time.Minute
 )
 
 var dataTag = []byte("data:")
@@ -1897,15 +1903,27 @@ func parseCodexRetryAfter(statusCode int, errorBody []byte, now time.Time) *time
 	if resetsAt := gjson.GetBytes(errorBody, "error.resets_at").Int(); resetsAt > 0 {
 		resetAtTime := time.Unix(resetsAt, 0)
 		if resetAtTime.After(now) {
-			retryAfter := resetAtTime.Sub(now)
+			retryAfter := capCodexUsageLimitCooldown(resetAtTime.Sub(now))
 			return &retryAfter
 		}
 	}
 	if resetsInSeconds := gjson.GetBytes(errorBody, "error.resets_in_seconds").Int(); resetsInSeconds > 0 {
-		retryAfter := time.Duration(resetsInSeconds) * time.Second
+		retryAfter := capCodexUsageLimitCooldown(time.Duration(resetsInSeconds) * time.Second)
 		return &retryAfter
 	}
 	return nil
+}
+
+// capCodexUsageLimitCooldown clamps an upstream-declared reset horizon to
+// codexMaxUsageLimitCooldown. Upstream resets_at/resets_in_seconds can point days
+// out even when overall usage is low, which would dead-cool the fallback route far
+// past its real availability; capping bounds the blackout while still deferring the
+// retry. It only ever shortens, never extends, the wait.
+func capCodexUsageLimitCooldown(retryAfter time.Duration) time.Duration {
+	if retryAfter > codexMaxUsageLimitCooldown {
+		return codexMaxUsageLimitCooldown
+	}
+	return retryAfter
 }
 
 func codexCreds(a *cliproxyauth.Auth) (apiKey, baseURL string) {
