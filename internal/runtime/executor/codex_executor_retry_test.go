@@ -219,3 +219,18 @@ func assertCodexErrorCode(t *testing.T, raw string, wantType string, wantCode st
 func itoa(v int64) string {
 	return strconv.FormatInt(v, 10)
 }
+
+func TestParseCodexRetryAfterCapsWeeklyWindow(t *testing.T) {
+	now := time.Now()
+	resetAt := now.Add(129 * time.Hour).Unix()
+	body := []byte(`{"error":{"type":"usage_limit_reached","resets_at":` + itoa(resetAt) + `}}`)
+	got := parseCodexRetryAfter(429, body, now)
+	if got == nil || *got != codexMaxUsageLimitCooldown {
+		t.Fatalf("expected cap %v, got %v", codexMaxUsageLimitCooldown, got)
+	}
+	body = []byte(`{"error":{"type":"usage_limit_reached","resets_in_seconds":30}}`)
+	got = parseCodexRetryAfter(429, body, now)
+	if got == nil || *got != 30*time.Second {
+		t.Fatalf("short wait must pass through, got %v", got)
+	}
+}
