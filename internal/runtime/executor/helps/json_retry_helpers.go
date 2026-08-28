@@ -23,6 +23,19 @@ func DeleteJSONField(body []byte, key string) []byte {
 	return updated
 }
 
+// maxGoogleRetryDelay bounds upstream-declared Google retry/quota-reset delays
+// (daily quotas can declare ~24h+) so the credential is not stranded when the
+// value flows into a cooldown. Only shortens, never extends. Same source of
+// truth as claudeMaxRateLimitCooldown (6h, jarvis-personas 21600s) — #2170.
+const maxGoogleRetryDelay = 6 * time.Hour
+
+func capGoogleRetryDelay(d time.Duration) time.Duration {
+	if d > maxGoogleRetryDelay {
+		return maxGoogleRetryDelay
+	}
+	return d
+}
+
 // ParseRetryDelay extracts the retry delay from a Google API 429 error response.
 func ParseRetryDelay(errorBody []byte) (*time.Duration, error) {
 	details := gjson.GetBytes(errorBody, "error.details")
@@ -39,7 +52,8 @@ func ParseRetryDelay(errorBody []byte) (*time.Duration, error) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse duration")
 			}
-			return &duration, nil
+			capped := capGoogleRetryDelay(duration)
+			return &capped, nil
 		}
 
 		for _, detail := range details.Array() {
@@ -52,7 +66,8 @@ func ParseRetryDelay(errorBody []byte) (*time.Duration, error) {
 			}
 			duration, err := time.ParseDuration(quotaResetDelay)
 			if err == nil {
-				return &duration, nil
+				capped := capGoogleRetryDelay(duration)
+				return &capped, nil
 			}
 		}
 	}
@@ -64,14 +79,16 @@ func ParseRetryDelay(errorBody []byte) (*time.Duration, error) {
 			seconds, err := strconv.Atoi(matches[1])
 			if err == nil {
 				duration := time.Duration(seconds) * time.Second
-				return &duration, nil
+				capped := capGoogleRetryDelay(duration)
+				return &capped, nil
 			}
 		}
 		reHuman := regexp.MustCompile(`after\s+((?:\d+h)?(?:\d+m)?(?:\d+s)?)\.?`)
 		if matches := reHuman.FindStringSubmatch(strings.ToLower(message)); len(matches) > 1 {
 			duration, err := time.ParseDuration(matches[1])
 			if err == nil && duration > 0 {
-				return &duration, nil
+				capped := capGoogleRetryDelay(duration)
+				return &capped, nil
 			}
 		}
 	}

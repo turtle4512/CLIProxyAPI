@@ -74,8 +74,9 @@ func TestClaudeExecutor_HonorsAnthropicRateLimitHeaders_Execute(t *testing.T) {
 	}
 
 	// Should be at least 7 days (reported reset) and at most 7 days + 35s (fuzz upper bound).
-	minExpected := 7*24*time.Hour - 5*time.Second
-	maxExpected := 7*24*time.Hour + 35*time.Second
+	// #2170: 7d horizon is capped at 6h (claudeMaxRateLimitCooldown), fuzz swallowed by the cap
+	minExpected := 6*time.Hour - 5*time.Second
+	maxExpected := 6*time.Hour + 35*time.Second
 	if *retryAfter < minExpected || *retryAfter > maxExpected {
 		t.Fatalf("RetryAfter = %v, want between %v and %v", *retryAfter, minExpected, maxExpected)
 	}
@@ -183,8 +184,9 @@ func TestClaudeExecutor_RateLimit_BothRejectedUsesLongest(t *testing.T) {
 		t.Fatalf("expected non-nil RetryAfter, got nil")
 	}
 
-	minExpected := 7*24*time.Hour - 5*time.Second
-	maxExpected := 7*24*time.Hour + 35*time.Second
+	// #2170: 7d horizon is capped at 6h (claudeMaxRateLimitCooldown), fuzz swallowed by the cap
+	minExpected := 6*time.Hour - 5*time.Second
+	maxExpected := 6*time.Hour + 35*time.Second
 	if *retryAfter < minExpected || *retryAfter > maxExpected {
 		t.Fatalf("RetryAfter = %v, want between %v and %v", *retryAfter, minExpected, maxExpected)
 	}
@@ -237,8 +239,9 @@ func TestClaudeExecutor_RateLimit_CountTokensHonorsRateLimitReset(t *testing.T) 
 		t.Fatalf("expected CountTokens rate limit error to be credential-scoped, got %v", err)
 	}
 
-	minExpected := 7*24*time.Hour - 5*time.Second
-	maxExpected := 7*24*time.Hour + 35*time.Second
+	// #2170: 7d horizon is capped at 6h (claudeMaxRateLimitCooldown), fuzz swallowed by the cap
+	minExpected := 6*time.Hour - 5*time.Second
+	maxExpected := 6*time.Hour + 35*time.Second
 	if *rap.RetryAfter() < minExpected || *rap.RetryAfter() > maxExpected {
 		t.Fatalf("RetryAfter = %v, want between %v and %v", *rap.RetryAfter(), minExpected, maxExpected)
 	}

@@ -14,7 +14,23 @@ import (
 const (
 	defaultClaudeRateLimitFuzzMinSeconds = 1
 	defaultClaudeRateLimitFuzzMaxSeconds = 30
+
+	// claudeMaxRateLimitCooldown bounds any upstream-declared reset horizon
+	// (7d/5h unified windows, Retry-After) so a single header cannot strand
+	// the credential — and every model state it scopes to — for days.
+	// Only shortens, never extends. Kept in sync with jarvis-personas
+	// rules/model-failover.yaml provider_anchor_max_seconds (21600s) — #2170/#2168.
+	claudeMaxRateLimitCooldown = 6 * time.Hour
 )
+
+// capClaudeRateLimitCooldown clamps an upstream-declared cooldown to
+// claudeMaxRateLimitCooldown (mirrors capCodexUsageLimitCooldown, #1582/#2170).
+func capClaudeRateLimitCooldown(retryAfter time.Duration) time.Duration {
+	if retryAfter > claudeMaxRateLimitCooldown {
+		return claudeMaxRateLimitCooldown
+	}
+	return retryAfter
+}
 
 // ClaudeHeadersIndicateUnifiedRateLimitRejection reports whether response headers explicitly
 // declare an Anthropic shared 5h or 7d rate-limit rejection. A Fable-only 7d_oi rejection
@@ -160,7 +176,7 @@ func parseClaudeRateLimitResetWithFuzz(headers http.Header, now time.Time, minFu
 
 	baseDuration := latestDeadline.Sub(now)
 	fuzz := randomClaudeFuzzDuration(minFuzzSec, maxFuzzSec)
-	effectiveDuration := baseDuration + fuzz
+	effectiveDuration := capClaudeRateLimitCooldown(baseDuration + fuzz)
 
 	log.WithFields(log.Fields{
 		"rejected_windows":   strings.Join(rejectedWindows, ","),

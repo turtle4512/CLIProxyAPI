@@ -66,7 +66,7 @@ func TestParseClaudeRateLimitReset_AllCases(t *testing.T) {
 		}
 	})
 
-	t.Run("7d rejected and 5h allowed", func(t *testing.T) {
+	t.Run("7d rejected is capped at 6h (#2170)", func(t *testing.T) {
 		h := make(http.Header)
 		h.Set("Anthropic-Ratelimit-Unified-Status", "rejected")
 		h.Set("Anthropic-Ratelimit-Unified-5h-Status", "allowed")
@@ -78,12 +78,12 @@ func TestParseClaudeRateLimitReset_AllCases(t *testing.T) {
 		if got == nil {
 			t.Fatal("expected non-nil RetryAfter")
 		}
-		if *got < 7*24*time.Hour-5*time.Second || *got > 7*24*time.Hour+5*time.Second {
-			t.Fatalf("expected ~7d, got %v", *got)
+		if *got != claudeMaxRateLimitCooldown {
+			t.Fatalf("expected %v (7d horizon capped, #2170), got %v", claudeMaxRateLimitCooldown, *got)
 		}
 	})
 
-	t.Run("both 5h and 7d rejected chooses longest", func(t *testing.T) {
+	t.Run("both 5h and 7d rejected capped at 6h (#2170)", func(t *testing.T) {
 		h := make(http.Header)
 		h.Set("Anthropic-Ratelimit-Unified-5h-Status", "rejected")
 		h.Set("Anthropic-Ratelimit-Unified-5h-Reset", strconv.FormatInt(now.Add(5*time.Hour).Unix(), 10))
@@ -94,8 +94,8 @@ func TestParseClaudeRateLimitReset_AllCases(t *testing.T) {
 		if got == nil {
 			t.Fatal("expected non-nil RetryAfter")
 		}
-		if *got < 7*24*time.Hour-5*time.Second || *got > 7*24*time.Hour+5*time.Second {
-			t.Fatalf("expected ~7d, got %v", *got)
+		if *got != claudeMaxRateLimitCooldown {
+			t.Fatalf("expected %v (7d horizon capped, #2170), got %v", claudeMaxRateLimitCooldown, *got)
 		}
 	})
 
@@ -147,7 +147,7 @@ func TestParseClaudeRateLimitReset_AllCases(t *testing.T) {
 		}
 	})
 
-	t.Run("non-fable combined rejection with 7d_oi reset keeps longer duration", func(t *testing.T) {
+	t.Run("non-fable combined rejection with 7d_oi reset capped at 6h (#2170)", func(t *testing.T) {
 		h := make(http.Header)
 		h.Set("Anthropic-Ratelimit-Unified-Status", "rejected")
 		h.Set("Anthropic-Ratelimit-Unified-5h-Status", "rejected")
@@ -160,8 +160,48 @@ func TestParseClaudeRateLimitReset_AllCases(t *testing.T) {
 		if got == nil {
 			t.Fatal("expected non-nil RetryAfter")
 		}
-		if *got < 7*24*time.Hour-5*time.Second || *got > 7*24*time.Hour+5*time.Second {
-			t.Fatalf("expected ~7d, got %v", *got)
+		if *got != claudeMaxRateLimitCooldown {
+			t.Fatalf("expected %v (7d horizon capped, #2170), got %v", claudeMaxRateLimitCooldown, *got)
+		}
+	})
+
+	t.Run("5h reset survives under cap (#2170 AC1: only shortens)", func(t *testing.T) {
+		h := make(http.Header)
+		h.Set("Anthropic-Ratelimit-Unified-5h-Status", "rejected")
+		h.Set("Anthropic-Ratelimit-Unified-5h-Reset", strconv.FormatInt(now.Add(5*time.Hour).Unix(), 10))
+		got := parseClaudeRateLimitResetWithFuzz(h, now, 0, 0)
+		if got == nil {
+			t.Fatal("expected non-nil RetryAfter")
+		}
+		if *got < 5*time.Hour-5*time.Second || *got > 5*time.Hour+5*time.Second {
+			t.Fatalf("expected ~5h preserved, got %v", *got)
+		}
+	})
+
+	t.Run("7d horizon with default fuzz still capped (#2170 AC1: <= cap)", func(t *testing.T) {
+		h := make(http.Header)
+		h.Set("Anthropic-Ratelimit-Unified-7d-Status", "rejected")
+		h.Set("Anthropic-Ratelimit-Unified-7d-Reset", strconv.FormatInt(now.Add(7*24*time.Hour).Unix(), 10))
+		for i := 0; i < 20; i++ {
+			got := ParseClaudeRateLimitReset(h, now)
+			if got == nil {
+				t.Fatal("expected non-nil RetryAfter")
+			}
+			if *got > claudeMaxRateLimitCooldown {
+				t.Fatalf("capped cooldown %v exceeds %v", *got, claudeMaxRateLimitCooldown)
+			}
+		}
+	})
+
+	t.Run("retry-after 7d capped at 6h (#2170 AC1)", func(t *testing.T) {
+		h := make(http.Header)
+		h.Set("Retry-After", strconv.FormatInt(7*24*3600, 10))
+		got := parseClaudeRateLimitResetWithFuzz(h, now, 0, 0)
+		if got == nil {
+			t.Fatal("expected non-nil RetryAfter")
+		}
+		if *got != claudeMaxRateLimitCooldown {
+			t.Fatalf("expected %v, got %v", claudeMaxRateLimitCooldown, *got)
 		}
 	})
 
