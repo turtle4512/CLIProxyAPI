@@ -627,6 +627,21 @@ nonstream-keepalive-interval: 0
 #         is-compat: false                    # optional: preserve thinking blocks with empty signatures for compatible upstreams
 #         thinking:                           # optional: exact thinking capability for this configured model
 #           levels: ["max", "xhigh", "high", "medium", "low", "minimal", "none", "auto"]
+#       # Anthropic-compatible third-party upstream (e.g. GLM via open.bigmodel.cn/api/anthropic).
+#       # A model without a declared `thinking` capability has the client's `thinking` and
+#       # `output_config.effort` stripped by default, so the upstream falls back to its own
+#       # default (GLM: full thinking). The options below override that per model:
+#       - name: "glm-5.3-flash"
+#         alias: "glm-5.3-flash"
+#         # optional; omit (default) to keep the behavior described above unchanged.
+#         #   passthrough: forward the client's thinking / output_config.effort as sent
+#         #   disabled:    always send thinking.type="disabled" and drop output_config.effort
+#         #   cap:         passthrough, but active thinking (adaptive/enabled) is sent with
+#         #                output_config.effort no higher than thinking-effort-cap (a missing
+#         #                effort is filled with the cap); disabled/absent thinking is untouched
+#         thinking-mode: "cap"
+#         # minimal | low | medium | high | xhigh | max. Setting it with thinking-mode omitted implies "cap".
+#         thinking-effort-cap: "low"
 #     excluded-models:
 #       - "claude-opus-4-5-20251101" # exclude specific models (exact match)
 #       - "claude-3-*"               # wildcard matching prefix (e.g. claude-3-7-sonnet-20250219)

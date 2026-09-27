@@ -80,9 +80,17 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	originalTranslated, body := helps.TranslateRequestPairWithAPIKeyModelCompatibility(ctx, opts.Headers, e.cfg, from, to, baseModel, originalPayload, req.Payload, upstreamStream, isCompat)
 	body = helps.SetStringIfDifferent(body, "model", upstreamModel)
 
+	thinkingPolicy := helps.ResolveClaudeThinkingPolicy(resolveClaudeKeyConfig(e.cfg, auth), baseModel, upstreamModel)
+	var thinkingSource []byte
+	if thinkingPolicy.Active() {
+		thinkingSource = bytes.Clone(body)
+	}
 	body, err = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier())
 	if err != nil {
 		return resp, err
+	}
+	if thinkingPolicy.Active() {
+		body = helps.ApplyClaudeThinkingPolicy(thinkingSource, body, thinkingPolicy)
 	}
 	if rebuildMidSystemMessageEnabled(e.cfg, auth) {
 		body = rebuildMidSystemMessagesToTopLevel(body)

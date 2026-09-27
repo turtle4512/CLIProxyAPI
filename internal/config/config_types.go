@@ -566,6 +566,20 @@ type ClaudeModel struct {
 
 	// Thinking configures the thinking/reasoning capability for this model.
 	Thinking *registry.ThinkingSupport `yaml:"thinking,omitempty" json:"thinking,omitempty"`
+
+	// ThinkingMode overrides how the client's thinking fields (thinking and
+	// output_config.effort) reach this Claude-compatible upstream model.
+	// Empty keeps the default pipeline unchanged. Supported values:
+	//   - "passthrough": forward the client's thinking fields as sent.
+	//   - "disabled": always send thinking.type="disabled" and drop effort.
+	//   - "cap": like passthrough, but active thinking (adaptive/enabled) is
+	//     sent with output_config.effort no higher than ThinkingEffortCap.
+	ThinkingMode string `yaml:"thinking-mode,omitempty" json:"thinking-mode,omitempty"`
+
+	// ThinkingEffortCap is the highest output_config.effort level forwarded in
+	// "cap" mode (minimal, low, medium, high, xhigh, max). Setting it while
+	// ThinkingMode is empty implies "cap".
+	ThinkingEffortCap string `yaml:"thinking-effort-cap,omitempty" json:"thinking-effort-cap,omitempty"`
 }
 
 func (m ClaudeModel) GetName() string { return m.Name }
