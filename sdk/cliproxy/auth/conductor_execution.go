@@ -368,7 +368,8 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		}
 		var authErr error
 		didRefreshOnUnauthorized := false
-		for _, upstreamModel := range models {
+		firstBytePlan := m.firstByteTimeoutPlanFor(auth, homeMode, providers, routeModel, tried, len(attempted), maxRetryCredentials)
+		for modelIdx, upstreamModel := range models {
 			resultModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
 			execReq := req
 			execReq.Model = upstreamModel
@@ -385,8 +386,22 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 				execReq = attachResolvedAPIKeyModelInfo(routing, execReq, auth, routeModel, upstreamModel)
 			}
 			startExec := time.Now()
-			resp, errExec := executor.Execute(execCtx, auth, execReq, execOpts)
+			attemptCtx := execCtx
+			var firstByte *firstByteGuard
+			if firstBytePlan.armFor(modelIdx, len(models)) {
+				attemptCtx, firstByte = startFirstByteGuard(execCtx, firstBytePlan.timeout)
+				attemptCtx = firstByte.withResponseHeaderTrace(attemptCtx)
+			}
+			resp, errExec := executor.Execute(attemptCtx, auth, execReq, execOpts)
 			durationExec := time.Since(startExec)
+			if firstByte != nil {
+				firstByte.markFirstByte()
+				firstByte.release()
+				if errExec != nil && firstByte.timedOut() && execCtx.Err() == nil {
+					errExec = firstByte.err()
+					entry.Warnf("first-byte timeout: provider=%s model=%s auth=%s after %s, failing over to next candidate", provider, upstreamModel, auth.ID, durationExec.Round(time.Millisecond))
+				}
+			}
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
 					return cliproxyexecutor.Response{}, errCtx
@@ -880,7 +895,8 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			models = models[:1]
 			pooled = false
 		}
-		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, execReq, execOpts, routeModel, streamExecutionModel, models, pooled, aliasResult, routing, !homeMode || selection != nil, selection != nil, unauthorizedRefreshTried)
+		streamCtx := withFirstByteTimeoutPlan(execCtx, m.firstByteTimeoutPlanFor(auth, homeMode, providers, routeModel, tried, len(attempted), maxRetryCredentials))
+		streamResult, errStream := m.executeStreamWithModelPool(streamCtx, executor, auth, provider, execReq, execOpts, routeModel, streamExecutionModel, models, pooled, aliasResult, routing, !homeMode || selection != nil, selection != nil, unauthorizedRefreshTried)
 		if errStream != nil {
 			if selection != nil {
 				excludeAuth := shouldExcludeHomeAuthAfterStreamError(execCtx, auth, errStream)

@@ -72,6 +72,14 @@ type Config struct {
 	// 0 keeps the legacy default cooldown. Negative values disable these cooldowns.
 	TransientErrorCooldownSeconds int `yaml:"transient-error-cooldown-seconds" json:"transient-error-cooldown-seconds"`
 
+	// FirstByteTimeoutSeconds bounds how long an openai-compatibility upstream may take to
+	// produce its first byte before the attempt is abandoned and the next candidate
+	// (lower priority tier / next pooled model) is tried. Non-stream requests measure the
+	// first response byte (headers); streaming requests measure the first data chunk and
+	// never switch once bytes were written to the client. Only applies while another
+	// candidate remains. Omitted uses the default (25s); 0 or negative disables it.
+	FirstByteTimeoutSeconds *int `yaml:"first-byte-timeout-seconds,omitempty" json:"first-byte-timeout-seconds,omitempty"`
+
 	// AuthAutoRefreshWorkers overrides the size of the core auth auto-refresh worker pool.
 	// When <= 0, the default worker count is used.
 	AuthAutoRefreshWorkers int `yaml:"auth-auto-refresh-workers" json:"auth-auto-refresh-workers"`

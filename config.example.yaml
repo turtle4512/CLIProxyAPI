@@ -176,6 +176,13 @@ save-cooldown-status: false
 # Set to 0 to keep the legacy 60-second cooldown; set to -1 to disable transient error cooldowns.
 transient-error-cooldown-seconds: 0
 
+# First-byte timeout (seconds) for openai-compatibility upstreams that share a model alias
+# across multiple providers (priority fallback). If the upstream produces no first byte
+# (non-stream: response headers; stream: first data chunk) within this window, the attempt
+# is abandoned and the next candidate is tried. Streams never switch after bytes reach the
+# client. Only applies while another candidate remains. Default 25; 0 disables.
+# first-byte-timeout-seconds: 25
+
 # When true, globally disable Claude request cloaking (the Claude Code CLI disguise and
 # system prompt replacement), so the original system prompt is passed through to Claude as-is.
 # Individual credentials can still override this: a claude-api-key entry via its "cloak.mode",

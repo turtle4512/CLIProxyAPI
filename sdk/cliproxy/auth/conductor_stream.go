@@ -114,11 +114,14 @@ func readStreamBootstrap(ctx context.Context, ch <-chan cliproxyexecutor.StreamC
 	}
 }
 
-func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, resultModel string, headers http.Header, buffered []cliproxyexecutor.StreamChunk, remaining <-chan cliproxyexecutor.StreamChunk, aliasResult OAuthModelAliasResult, ephemeralResult bool, opts cliproxyexecutor.Options) *cliproxyexecutor.StreamResult {
+func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, resultModel string, headers http.Header, buffered []cliproxyexecutor.StreamChunk, remaining <-chan cliproxyexecutor.StreamChunk, aliasResult OAuthModelAliasResult, ephemeralResult bool, opts cliproxyexecutor.Options, onDone func()) *cliproxyexecutor.StreamResult {
 	out := make(chan cliproxyexecutor.StreamChunk)
 	streamStart := time.Now()
 	go func() {
 		defer close(out)
+		if onDone != nil {
+			defer onDone()
+		}
 		var failed bool
 		forward := true
 		var rewriter *StreamRewriter
@@ -210,6 +213,18 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		return nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
 	}
 	ctx = contextWithRequestedModelAlias(ctx, opts, routeModel)
+	firstBytePlan := firstByteTimeoutPlanFromContext(ctx)
+	// Guards of failed attempts are released on return; the guard of the attempt whose
+	// stream is handed to the client lives until that stream finishes.
+	var firstByteGuards []*firstByteGuard
+	var liveFirstByteGuard *firstByteGuard
+	defer func() {
+		for _, g := range firstByteGuards {
+			if g != liveFirstByteGuard {
+				g.release()
+			}
+		}
+	}()
 	var lastErr error
 	didRefreshOnUnauthorized := false
 	if auth != nil && unauthorizedRefreshTried != nil {
@@ -236,8 +251,20 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		}
 		entry := logEntryWithRequestID(ctx)
 		startStream := time.Now()
-		streamResult, errStream := executor.ExecuteStream(ctx, auth, execReq, execOpts)
+		// First-byte guard: until the first data chunk arrives nothing has been written to
+		// the client, so a stalled upstream can still be abandoned for the next candidate.
+		attemptCtx := ctx
+		var firstByte *firstByteGuard
+		if firstBytePlan.armFor(idx, len(execModels)) {
+			attemptCtx, firstByte = startFirstByteGuard(ctx, firstBytePlan.timeout)
+			firstByteGuards = append(firstByteGuards, firstByte)
+		}
+		streamResult, errStream := executor.ExecuteStream(attemptCtx, auth, execReq, execOpts)
 		durationStream := time.Since(startStream)
+		if errStream != nil && firstByte.timedOut() && ctx.Err() == nil {
+			errStream = firstByte.err()
+			entry.Warnf("first-byte timeout: provider=%s model=%s auth=%s after %s (no response), failing over to next candidate", provider, execModel, auth.ID, durationStream.Round(time.Millisecond))
+		}
 		if errStream != nil {
 			if errCtx := ctx.Err(); errCtx != nil {
 				return nil, errCtx
@@ -312,7 +339,14 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			continue
 		}
 
-		buffered, closed, bootstrapErr := readStreamBootstrap(ctx, streamResult.Chunks)
+		buffered, closed, bootstrapErr := readStreamBootstrap(attemptCtx, streamResult.Chunks)
+		if firstByte != nil && !firstByte.markFirstByte() && ctx.Err() == nil {
+			// Timer fired before (or while) the first chunk arrived: abandon this attempt.
+			// Nothing has been forwarded to the client yet.
+			bootstrapErr = firstByte.err()
+			buffered, closed = nil, false
+			entry.Warnf("first-byte timeout: provider=%s model=%s auth=%s after %s (no first chunk), failing over to next candidate", provider, execModel, auth.ID, time.Since(startStream).Round(time.Millisecond))
+		}
 		if bootstrapErr != nil {
 			if errCtx := ctx.Err(); errCtx != nil {
 				discardStreamChunks(streamResult.Chunks)
@@ -446,7 +480,12 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			remaining = closedCh
 		}
 		attemptAliasResult := resolveAttemptAliasResult(routing, auth, routeModel, execModel, aliasResult)
-		return m.wrapStreamResult(ctx, auth.Clone(), provider, resultModel, streamResult.Headers, buffered, remaining, attemptAliasResult, ephemeralResult, execOpts), nil
+		var onDone func()
+		if firstByte != nil {
+			liveFirstByteGuard = firstByte
+			onDone = firstByte.release
+		}
+		return m.wrapStreamResult(ctx, auth.Clone(), provider, resultModel, streamResult.Headers, buffered, remaining, attemptAliasResult, ephemeralResult, execOpts, onDone), nil
 	}
 	if lastErr == nil {
 		lastErr = &Error{Code: "auth_not_found", Message: "no upstream model available"}
