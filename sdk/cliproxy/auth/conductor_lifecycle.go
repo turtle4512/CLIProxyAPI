@@ -432,6 +432,15 @@ func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 	if IsConfigAPIKeyAuth(auth) {
 		return nil
 	}
+	// Config-derived openai-compatibility blocks must never be written to the
+	// auth store, even when they carry no api-key (and therefore are not
+	// classified as API-key auths). A persisted copy is re-loaded from disk as a
+	// standalone file auth without its config origin, which drops the block's
+	// alias-to-upstream model translation and sends raw client model aliases
+	// upstream.
+	if isConfigOpenAICompatBlockAuth(auth) {
+		return nil
+	}
 	if auth.Attributes != nil {
 		if v := strings.ToLower(strings.TrimSpace(auth.Attributes["runtime_only"])); v == "true" {
 			return nil
