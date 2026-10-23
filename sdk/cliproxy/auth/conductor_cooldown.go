@@ -851,6 +851,15 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 						} else {
 							state.NextRetryAfter = now.Add(30 * time.Minute)
 						}
+					} else if isFirstByteTimeoutResultError(result.Error) {
+						// Slow first byte is a latency signal, not a credential fault: keep the
+						// cooldown short so the upstream is retried soon.
+						if disableCooling {
+							state.NextRetryAfter = time.Time{}
+						} else {
+							state.NextRetryAfter = now.Add(firstByteTimeoutCooldown)
+						}
+						state.Unavailable = !state.NextRetryAfter.IsZero()
 					} else {
 						switch statusCode {
 						case 401, 402, 403:

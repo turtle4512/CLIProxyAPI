@@ -536,7 +536,8 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		}
 		var authErr error
 		didRefreshOnUnauthorized := false
-		for _, upstreamModel := range models {
+		firstBytePlan := m.firstByteTimeoutPlanFor(auth, homeMode, providers, routeModel, tried, len(attempted), maxRetryCredentials)
+		for modelIdx, upstreamModel := range models {
 			execCtx = newUpstreamAttemptContext(execCtx)
 			resultModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
 			execReq := req
@@ -573,9 +574,23 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			execReq = attachResolvedExecutionModelInfo(routing, execReq, auth, routeModel, upstreamModel, restoreExecutionModel)
 			execCtx = syncMetadataSessionToContext(execCtx, execOpts.Metadata)
 			startExec := time.Now()
-			resp, errExec := executor.Execute(execCtx, auth, execReq, execOpts)
-			errExec = markUpstreamExecutionAttemptFromContext(execCtx, errExec)
+			attemptCtx := execCtx
+			var firstByte *firstByteGuard
+			if firstBytePlan.armFor(modelIdx, len(models)) {
+				attemptCtx, firstByte = startFirstByteGuard(execCtx, firstBytePlan.timeout)
+				attemptCtx = firstByte.withResponseHeaderTrace(attemptCtx)
+			}
+			resp, errExec := executor.Execute(attemptCtx, auth, execReq, execOpts)
 			durationExec := time.Since(startExec)
+			if firstByte != nil {
+				firstByte.markFirstByte()
+				firstByte.release()
+				if errExec != nil && firstByte.timedOut() && execCtx.Err() == nil {
+					errExec = firstByte.err()
+					entry.Warnf("first-byte timeout: provider=%s model=%s auth=%s after %s, failing over to next candidate", provider, upstreamModel, auth.ID, durationExec.Round(time.Millisecond))
+				}
+			}
+			errExec = markUpstreamExecutionAttemptFromContext(execCtx, errExec)
 			if errExec != nil {
 				if hasUpstreamExecutionAttempt(errExec) {
 					upstreamErr = errExec
@@ -1151,7 +1166,8 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			models = models[:1]
 			pooled = false
 		}
-		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, execReq, execOpts, routeModel, streamExecutionModel, models, pooled, aliasResult, routing, !homeMode || selection != nil, selection != nil)
+		streamCtx := withFirstByteTimeoutPlan(execCtx, m.firstByteTimeoutPlanFor(auth, homeMode, providers, routeModel, tried, len(attempted), maxRetryCredentials))
+		streamResult, errStream := m.executeStreamWithModelPool(streamCtx, executor, auth, provider, execReq, execOpts, routeModel, streamExecutionModel, models, pooled, aliasResult, routing, !homeMode || selection != nil, selection != nil)
 		if errStream != nil {
 			if hasUpstreamExecutionAttempt(errStream) {
 				upstreamErr = errStream
